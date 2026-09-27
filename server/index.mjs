@@ -27,6 +27,11 @@ export function cleanName(value) {
   if (typeof value !== 'string') return 'Another browser';
   return value.replace(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, '').trim().slice(0, 40) || 'Another browser';
 }
+export function cleanDeviceId(value) {
+  return typeof value === 'string' && /^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(value)
+    ? value.toLowerCase()
+    : randomUUID();
+}
 
 export function createShelfServer(overrides = {}) {
   const env = process.env;
@@ -85,11 +90,18 @@ export function createShelfServer(overrides = {}) {
     return {
       roomId: room.id, expiresAt: room.expiresAt,
       owner: room.owner === client.id,
-      ...(peer ? { peer: { id: peer.id, name: peer.name, online: !!peer.stream }, initiator: room.owner === client.id } : {}),
+      ...(peer ? { peer: { id: peer.id, name: peer.name, deviceId: peer.deviceId, online: !!peer.stream }, initiator: room.owner === client.id } : {}),
       ...(room.owner === client.id && !room.guest ? { code: room.code, inviteSecret: room.secret, inviteExpiresAt: room.inviteExpiresAt } : {}),
     };
   }
   function snapshot(client) { send(client, 'snapshot', { state: roomState(client) }); }
+  function sessionPayload(client) {
+    return {
+      token: client.token, id: client.id, name: client.name, deviceId: client.deviceId,
+      state: roomState(client),
+      config: { iceServers: iceServers(client), iceTransportPolicy: config.iceTransportPolicy, maxFileBytes: config.maxFileBytes },
+    };
+  }
   function rotateInvite(room) {
     if (room.code) codes.delete(room.code);
     let code;
@@ -139,7 +151,7 @@ export function createShelfServer(overrides = {}) {
     try {
       const path = new URL(req.url, 'http://localhost').pathname;
       const ip = config.trustProxy ? String(req.headers['x-forwarded-for'] || req.socket.remoteAddress).split(',')[0].trim() : req.socket.remoteAddress;
-      if (path === '/healthz' && req.method === 'GET') return json(res, { status: 'ok', version: '1.0.0' });
+      if (path === '/healthz' && req.method === 'GET') return json(res, { status: 'ok', version: '1.1.0' });
       if (path.startsWith('/api/')) {
         res.setHeader('Cache-Control', 'no-store');
         validateOrigin(req, req.method === 'POST');
@@ -148,10 +160,10 @@ export function createShelfServer(overrides = {}) {
           if (sessions.size >= config.maxSessions) fail(503, 'Shelf is at capacity. Please try again shortly.');
           const input = await body(req); const now = config.now();
           const token = opaque(32); const id = randomUUID();
-          const client = { id, name: cleanName(input.name), token, roomId: opaque(12), createdAt: now, lastSeen: now, expiresAt: now + config.sessionTTL, stream: null, sequence: 0, history: [], historyBytes: 0 };
+          const client = { id, name: cleanName(input.name), deviceId: cleanDeviceId(input.deviceId), token, roomId: opaque(12), createdAt: now, lastSeen: now, expiresAt: now + config.sessionTTL, stream: null, sequence: 0, history: [], historyBytes: 0 };
           const room = { id: client.roomId, owner: id, guest: null, expiresAt: client.expiresAt };
           sessions.set(token, client); ids.set(id, client); rooms.set(room.id, room); rotateInvite(room);
-          return json(res, { token, id, name: client.name, state: roomState(client), config: { iceServers: iceServers(client), iceTransportPolicy: config.iceTransportPolicy, maxFileBytes: config.maxFileBytes } }, 201);
+          return json(res, sessionPayload(client), 201);
         }
         const client = auth(req);
         if (path === '/api/events' && req.method === 'GET') {
@@ -170,6 +182,28 @@ export function createShelfServer(overrides = {}) {
         if (req.method !== 'POST') fail(405, 'Method not allowed.');
         rate(`command:${client.id}`, 240);
         const input = await body(req);
+        if (path === '/api/resume') {
+          rate(`resume:${client.id}`, 30);
+          const now = config.now();
+          let room = rooms.get(client.roomId);
+          if (!room) {
+            client.roomId = opaque(12);
+            client.expiresAt = Math.min(now + config.sessionTTL, client.createdAt + 7200000);
+            room = { id: client.roomId, owner: client.id, guest: null, expiresAt: client.expiresAt };
+            rooms.set(room.id, room);
+            rotateInvite(room);
+          } else {
+            const members = [ids.get(room.owner), ids.get(room.guest)].filter(Boolean);
+            const maximum = Math.min(...members.map(member => member.createdAt + 7200000));
+            room.expiresAt = Math.min(now + config.sessionTTL, maximum);
+            for (const id of [room.owner, room.guest]) {
+              const member = ids.get(id);
+              if (member) member.expiresAt = room.expiresAt;
+            }
+          }
+          snapshot(other(client));
+          return json(res, sessionPayload(client));
+        }
         if (path === '/api/join') {
           rate(`join:${ip}`, 8); rate(`join-session:${client.id}`, 8);
           if (other(client)) fail(409, 'End your current connection before joining another.');
