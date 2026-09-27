@@ -6,6 +6,7 @@
   "type": "module",
   "engines": { "node": ">=22.16.0" },
   "scripts": {
+    "prestart": "npm run build",
     "start": "node --env-file-if-exists=.env server/index.mjs",
     "dev": "npm run build && node --watch --env-file-if-exists=.env server/index.mjs",
     "build": "node scripts/build.mjs",

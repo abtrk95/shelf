@@ -1,17 +1,14 @@
 # Start Shelf
 
-**The ready-to-run app is already built. No database, account, or API key is needed for a local test.**
-
-1. Install Node.js 22.16+ (Node 22 or 24).
-2. Open a terminal in this `shelf` folder.
-3. Run:
+Install Node.js 22.16 or newer, then run these commands in the project folder:
 
 ```sh
+npm ci --include=dev
 npm start
 ```
 
-Open **http://localhost:3000** in two separate tabs or browser windows. Enter the first tab's eight-character code on the second, approve the connection, add a file or text, then accept it on the other side.
+Open `http://localhost:3000` in two tabs. Enter one tab's eight-character code on the other. They connect immediately; text and files arrive automatically. Tap a text card to read it in full. Use the header Connection button for session details or to disconnect.
 
-**To use a real phone and computer:** put the app at a shared HTTPS address. Scanning a `localhost` QR on your phone will not open your computer. Read `docs/DEPLOYMENT.md`; Docker + HTTPS configuration is included. Configure your own TURN server for networks where a direct connection is blocked.
+Keep the code private and both tabs open. Saving files and opening links still require your action. Refreshing clears the current live shelf, so save anything needed first.
 
-`README.md` is the feature/setup guide. `docs/TEST_REPORT.md` records what was actually tested. `docs/KNOWN_LIMITATIONS.md` lists remaining browser and product constraints.
+For phone-to-computer use, deploy to the same reachable HTTPS address. Configure a TURN relay for networks that block direct connections. See `docs/DEPLOYMENT.md`; `docs/TEST_REPORT.md` separates executed checks from pending browser validation.

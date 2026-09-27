@@ -1,29 +1,25 @@
-# Known limitations — version 1.0.0
+# Known limitations
 
 ## Product scope
 
-This release implements the central two-browser shelf, not every idea in the earlier product concept. Persistent trusted-device identities/automatic reconnection across visits, multi-device rooms, auto-receive, public discovery, cloud delivery while the receiver is offline, and permanent histories are not implemented.
+This release supports two browsers per temporary session. It does not implement remembered-device identities across visits, multi-device rooms, public discovery, offline cloud delivery or permanent history. Pairing and receipt are automatic only within the current live session.
 
-There is no built-in QR camera scanner: use the phone's normal camera to open the invitation. The manifest is install-friendly, but there is no offline service worker or OS share-target integration. Native sharing of a received item is exposed only when the browser supports it. No installation is required for the main flow.
+Use the phone's regular camera for QR invitations. There is no built-in camera scanner, offline service worker or OS share-target integration. Native sharing is offered where supported. Folders can be selected where supported, but files transfer individually; downloads do not reconstruct directory trees or generate ZIPs. There is no PDF renderer, format conversion or fetched website metadata.
 
-Folders may be selected where the browser supports a directory picker, but files are transferred individually; directory structures are not rebuilt on download and no ZIP is generated. Photos are original individual files, not an automatic gallery archive. There is no PDF/document renderer, conversion pipeline, arbitrary-file preview or fetched website metadata. Link cards deliberately avoid contacting remote websites until opened.
+Text/link cards and supported images have full-content dialogs. Core interface copy is English/Arabic; some low-level errors remain English. Responsive layouts, semantic dialogs and keyboard/reduced-motion behavior are implemented but still require the browser/accessibility checks listed in the test report.
 
-The English and Arabic core UI is translated. Some low-level validation/network error strings remain English. Arabic layouts are tested for overflow, not independently reviewed for all linguistic nuances. Keyboard navigation and semantic markup are implemented; this is not a formal WCAG conformance audit.
+## Browser and networking boundaries
 
-## Platform behavior
+Both devices need the same reachable HTTPS origin. Keep both original tabs alive. Temporary channel interruptions can resume, but refreshing, closing a tab, browser/OS suspension or restarting the server can lose the live session. Wake lock, clipboard access and sharing remain subject to browser permissions and support.
 
-Both devices need the same reachable HTTPS origin. A localhost address works only on that same device. Connecting phones via a plain LAN IP over HTTP is deliberately blocked as insecure.
+The configured per-file ceiling is 2 GiB, not proof of reliable 2 GiB transfers. Receiving storage and available quota can impose lower limits. Memory fallback is capped at 128 MiB total. Automatically received content also has a cumulative retained-storage cap; remove items to reclaim it. Stored browser files have no additional application-level encryption at rest. Cleanup after a crash is best effort.
 
-Both tabs must stay alive. The app handles transient reconnection, not refresh, browser termination, OS suspension, or a server restart. Screen wake lock is best effort, not a guarantee against suspension. Ordinary browser permissions can block clipboard access or sharing; manual-copy/download fallbacks remain available.
+A valid unexpired invitation is permission to join and send. Keep it private; the app no longer provides a second approval prompt. Files are not automatically downloaded to the operating system, links are not automatically opened and the clipboard is not automatically modified.
 
-File size is bounded by browser storage, device memory and the configured server limit. A 2 GiB ceiling is NOT evidence of tested 2 GiB transfer support. Executed browser tests cover files through 16 MiB, including a forced disconnect and byte-level verification. The memory fallback is 128 MiB total; it is not appropriate for large files. OPFS availability and quota vary by browser/mode. Temporary browser files are not application-encrypted at rest.
+Restrictive networks need a separately configured TURN relay. STUN is not a relay. Anonymous TURN issuance needs quotas, egress restrictions and cost controls. No relay service is provisioned by this source update.
 
-## Networking and infrastructure
+## Operations and verification
 
-Restrictive networks need an operator-supplied TURN service. STUN alone is not a relay. The app supports expiring coturn-compatible credentials; no public TURN endpoint, paid service, certificate, DNS record, or hosting account is included. Direct connectivity may still be unavailable on managed corporate browsers or firewalls. Relay-only mode can be used to validate the configured relay or reduce disclosure of endpoint IP addresses to a peer.
+The signaling server is single-instance and in-memory. Restarts end pairings. Distributed state/rate limiting, load validation, uptime monitoring and independent penetration testing are not included.
 
-The signaling service is single-instance and keeps all rooms in memory. No Redis, distributed rate limit, multi-region orchestration, load test, external penetration test or production uptime monitoring is included. An anonymous application can expose its relay budget to abuse even with short-lived credentials: quotas, egress restrictions, budget alerts and an edge abuse policy are operator responsibilities.
-
-## What has not been verified in this environment
-
-Real Safari/iOS, Firefox, physical Android devices, cross-carrier networking, public HTTPS/TURN routing, certificate automation, Docker/Compose execution, the GitHub-hosted CI run, extreme concurrent load, multi-gigabyte performance, and assistive-technology certification have not been executed here. Chromium mobile emulation is not a substitute for Safari or a physical phone test. Treat the supplied launch checklist as required before a broad public launch.
+54 automated Node checks and the TypeScript build passed locally. The updated real-browser suite has not completed: the local managed browser blocks navigation and the GitHub test job did not start a runner. Real-device Safari/Android, Firefox, public TURN, multi-gigabyte performance, Docker execution and formal accessibility validation remain pending. See `docs/TEST_REPORT.md` and the deployment checklist.

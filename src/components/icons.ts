@@ -33,6 +33,7 @@ const paths: Record<string,string> = {
   shelf:'<path d="M3 5h18v4H3zM5 9v6h14V9M3 15h18v4H3zM6 19v2m12-2v2"/>',
   disconnect:'<path d="M9 4v5m6-5v5M6 9h12v3a6 6 0 0 1-12 0zM12 18v4"/>',
   sparkle:'<path d="m12 3 2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5z"/>',
+  chevronDown:'<path d="m6 9 6 6 6-6"/>',
   plus:'<path d="M12 5v14M5 12h14"/>',
   globe:'<circle cx="12" cy="12" r="9"/><ellipse cx="12" cy="12" rx="4" ry="9"/><path d="M3 12h18"/>',
 };

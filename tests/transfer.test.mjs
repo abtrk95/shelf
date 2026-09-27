@@ -34,17 +34,22 @@ function harness(t, limit = 2 * 1024 * 1024) {
   return { engine, storage, channel, notices, sent, inject, flush, offer };
 }
 
-test('receiver never writes or delivers unaccepted file bytes', async t => {
+test('valid offers are automatically accepted without a receive action', async t => {
   const h = harness(t), meta = h.offer();
-  h.inject(meta); h.inject(makeFrame(meta.id, 0, new Uint8Array([1, 2, 3]))); await h.flush();
-  assert.equal(h.engine.items[0].state, 'incoming');
-  assert.equal(h.engine.items[0].bytes, 0);
-  assert.equal(h.sent.length, 0);
+  h.inject(meta); await h.flush();
+  assert.equal(h.engine.items[0].state, 'receiving');
+  assert.equal(h.engine.items[0].accepted, true);
+  assert.deepEqual(h.sent[0], {type:'accept',id:meta.id,offset:0});
+});
+test('unsolicited file bytes without an offer are never stored', async t => {
+  const h = harness(t), meta = h.offer();
+  h.inject(makeFrame(meta.id,0,new Uint8Array([1,2,3]))); await h.flush();
+  assert.equal(h.engine.items.length,0);assert.equal(h.sent.length,0);
 });
 
 test('receiver verifies size and SHA-256 before confirming delivery', async t => {
   const h = harness(t), meta = h.offer(), bytes = new Uint8Array([1, 2, 3]);
-  h.inject(meta); await h.flush(); await h.engine.accept(meta.id);
+  h.inject(meta); await h.flush();
   assert.equal(h.sent[0].type, 'accept');
   h.inject(makeFrame(meta.id, 0, bytes));
   h.inject({ type: 'finish', id: meta.id, digest: new SHA256().update(bytes).digest() });
@@ -56,7 +61,7 @@ test('receiver verifies size and SHA-256 before confirming delivery', async t =>
 
 test('corrupted payload cannot be reported as successfully delivered', async t => {
   const h = harness(t), meta = h.offer();
-  h.inject(meta); await h.flush(); await h.engine.accept(meta.id);
+  h.inject(meta); await h.flush();
   h.inject(makeFrame(meta.id, 0, new Uint8Array([1, 2, 3])));
   h.inject({ type: 'finish', id: meta.id, digest: '0'.repeat(64) }); await h.flush();
   assert.equal(h.engine.items[0].state, 'error');
@@ -66,7 +71,7 @@ test('corrupted payload cannot be reported as successfully delivered', async t =
 
 test('out-of-sequence data closes the offending channel', async t => {
   const h = harness(t), meta = h.offer(6);
-  h.inject(meta); await h.flush(); await h.engine.accept(meta.id);
+  h.inject(meta); await h.flush();
   h.inject(makeFrame(meta.id, 3, new Uint8Array([1, 2, 3]))); await h.flush();
   assert.equal(h.channel.readyState, 'closed');
   assert.match(h.notices.at(-1), /out of sequence/);
@@ -92,9 +97,39 @@ test('malicious peer cannot grow the pending application receive queue without b
 
 test('cancelled incoming items ignore late finish and data messages', async t => {
   const h = harness(t), meta = h.offer(), bytes = new Uint8Array([1, 2, 3]);
-  h.inject(meta); await h.flush(); await h.engine.accept(meta.id); await h.engine.cancel(meta.id);
+  h.inject(meta); await h.flush(); await h.engine.cancel(meta.id);
   h.inject(makeFrame(meta.id, 0, bytes));
   h.inject({ type: 'finish', id: meta.id, digest: new SHA256().update(bytes).digest() }); await h.flush();
   assert.equal(h.engine.items[0].state, 'cancelled');
   assert.equal(h.sent.some(message => message.type === 'complete'), false);
+});
+
+test('automatic receiving has a cumulative storage budget', async t => {
+  const h=harness(t),first=h.offer(700000),second=h.offer(700000);
+  h.inject(first);await h.flush();h.inject(second);await h.flush();
+  assert.equal(h.engine.items.length,1);assert.equal(h.sent.at(-1).type,'error');
+  assert.match(h.sent.at(-1).message,/shelf is full/);
+  await h.engine.remove(first.id);h.inject(second);await h.flush();
+  assert.equal(h.engine.items[0].id,second.id);assert.equal(h.sent.at(-1).type,'accept');
+});
+test('storage failure is visible and never acknowledged as an accepted transfer', async t => {
+  const h=harness(t),meta=h.offer();h.storage.create=async()=>{throw new Error('Storage is full.');};
+  h.inject(meta);await h.flush();assert.equal(h.engine.items[0].state,'error');
+  assert.equal(h.sent.some(m=>m.type==='accept'),false);assert.equal(h.sent.at(-1).type,'error');
+});
+test('duplicate offers do not allocate or duplicate a receiving item', async t => {
+  const h=harness(t),meta=h.offer();let allocations=0;const create=h.storage.create.bind(h.storage);
+  h.storage.create=async(...args)=>{allocations++;return create(...args);};
+  h.inject(meta);await h.flush();h.inject(meta);await h.flush();
+  assert.equal(h.engine.items.length,1);assert.equal(allocations,1);
+});
+test('text preserves leading whitespace, line breaks, and trailing whitespace', async t => {
+  const h=harness(t);const text='  Heading\n\nمرحبا 🌿\n  ';
+  h.engine.addText(text);assert.equal(h.engine.items[0].text,text);
+  assert.equal(await h.engine.items[0].file.text(),text);
+});
+test('a peer cannot reuse the identifier of an outgoing item', async t => {
+  const h=harness(t);h.engine.addText('Local note');const id=h.engine.items[0].id;
+  h.inject({...h.offer(),id});await h.flush();assert.equal(h.channel.readyState,'closed');
+  assert.equal(h.engine.items.length,1);
 });

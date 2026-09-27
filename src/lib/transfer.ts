@@ -19,7 +19,7 @@ export class TransferEngine {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private lastNotify = 0;
   private destroyed = false;
-  constructor(readonly storage: TemporaryStorage, private maxBytes: number, private changed: () => void, private notice: (message: string) => void, private completed: () => void) {}
+  constructor(readonly storage: TemporaryStorage, private maxBytes: number, private changed: () => void, private notice: (message: string) => void, private completed: (item: ShelfItem) => void) {}
   get limit(): number { return Math.min(this.maxBytes, this.storage.maxFileBytes); }
   get connected(): boolean { return this.channel?.readyState === 'open'; }
   get active(): boolean { return this.items.some(i => ['sending','receiving','preparing','verifying'].includes(i.state)); }
@@ -37,7 +37,7 @@ export class TransferEngine {
     if (channel) {
       channel.bufferedAmountLowThreshold = WINDOW_BYTES / 2;
       channel.onmessage = event => {
-        // A hostile approved peer must not create an unbounded disk-write queue.
+        // A hostile paired peer must not create an unbounded disk-write queue.
         const size = typeof event.data === 'string' ? event.data.length * 2 : event.data instanceof ArrayBuffer ? event.data.byteLength : 0;
         if (!size || this.queuedReadBytes + size > 1048576 || this.queuedReadMessages >= 256) {
           channel.onmessage = null; channel.close();
@@ -72,7 +72,7 @@ export class TransferEngine {
     }
   }
   addText(text: string): void {
-    const value = text.trim(); if (!value) return;
+    if (!text.trim()) return; const value = text;
     const blob = new Blob([value], { type: 'text/plain;charset=utf-8' });
     if (blob.size > MAX_TEXT_BYTES) throw new Error('Text is limited to 128 KB. Save longer text as a file.');
     const url = safeURL(value);
@@ -140,7 +140,15 @@ export class TransferEngine {
       if(this.items.length>=MAX_ITEMS){this.send({type:'error',id:message.id,message:'The receiving shelf is full.'});return;}
       const item: ShelfItem={id:message.id,name:message.name,mime:message.mime,size:message.size,kind:message.kind,direction:'received',state:'incoming',createdAt:Date.now(),bytes:0,speed:0,progress:0,accepted:false};
       incoming={item,meta:message,hash:new SHA256(),received:0,ackAt:0,started:Date.now()};
-      this.incoming.set(item.id,incoming);this.items.unshift(item);this.notice('An item is ready to receive.');this.notify(true);return;
+      // Automatic receiving is scoped to the one paired data channel. Keep all
+      // protocol, item-count, size, queue, and storage checks before accepting bytes.
+      if (this.outgoing.has(item.id)) throw new Error('The transfer identifier is already in use.');
+      const reserved = this.items.filter(i => i.direction === 'received' && !['error','cancelled','declined'].includes(i.state)).reduce((sum, i) => sum + i.size, 0);
+      if (reserved + item.size > this.storage.maxFileBytes) {
+        this.send({type:'error',id:item.id,message:'The receiving shelf is full. Remove received items to free temporary storage.'}); return;
+      }
+      this.incoming.set(item.id,incoming);this.items.unshift(item);
+      await this.accept(item.id);return;
     }
     if(message.type==='accept'){
       const outgoing=this.outgoing.get(message.id);
@@ -171,14 +179,14 @@ export class TransferEngine {
           incoming.item.text=await blob.text();
           if(incoming.meta.kind==='link'&&!safeURL(incoming.item.text))incoming.item.kind='text';
         }else incoming.item.url=URL.createObjectURL(blob);
-        incoming.item.state='complete';this.send({type:'complete',id:message.id,digest});this.notify(true);this.completed();
+        incoming.item.state='complete';this.send({type:'complete',id:message.id,digest});this.notify(true);this.completed(incoming.item);
       }catch(error){this.failIncoming(incoming,errorMessage(error));}
       return;
     }
     if(message.type==='complete'){
       const outgoing=this.outgoing.get(message.id);if(!outgoing)return;
       if(!outgoing.digest||outgoing.digest!==message.digest){outgoing.item.state='error';outgoing.item.error='The delivery could not be verified. Retry this item.';}
-      else{outgoing.item.digest=message.digest;outgoing.item.bytes=outgoing.blob.size;outgoing.item.progress=1;outgoing.item.state='complete';this.completed();}
+      else{outgoing.item.digest=message.digest;outgoing.item.bytes=outgoing.blob.size;outgoing.item.progress=1;outgoing.item.state='complete';this.completed(outgoing.item);}
       this.notify(true);return;
     }
     const item=this.items.find(i=>i.id===message.id);if(!item||item.state==='complete')return;
