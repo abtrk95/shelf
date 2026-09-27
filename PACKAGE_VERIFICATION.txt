@@ -1,14 +1,8 @@
-Shelf 1.0.0 — package verification
-26 September 2026
+Shelf source checkout — September 2026 UX update
 
-PASS: ZIP extracted into a clean temporary directory.
-PASS: No node_modules or runtime npm dependencies were present.
-PASS: npm start launched the app from the extracted package (Node v22.16.0).
-PASS: /healthz returned status ok.
-PASS: HTML, CSS, main client module, transfer module and icon returned HTTP 200.
-PASS: npm test from the extracted package — 44 passed, 0 failed.
-PASS: Archive CRC verification.
-
-The final archive was regenerated only to include this report; application and
-test files are unchanged from the extracted-package checks above.
-Browser and deployment validation scope: docs/TEST_REPORT.md.
+This repository is source-first. Install build dependencies with npm ci --include=dev.
+The compiled dist/ directory is generated locally or by the deployment build; it is not committed.
+Run npm run check for strict type checking, a production build and all Node tests.
+54 Node checks passed in the implementation workspace.
+Updated browser tests remain unverified; see docs/TEST_REPORT.md.
+Earlier ZIP-package verification details and version 1.0 screenshots are historical, not a verification of this source update.

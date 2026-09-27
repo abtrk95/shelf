@@ -47,7 +47,7 @@ export function createShelfServer(overrides = {}) {
   if (config.production && config.allowedOrigins.some(o => !o.startsWith('https://'))) throw new Error('Production origins must use HTTPS.');
   if (config.turnUrls.length && !config.turnSecret) throw new Error('TURN_URLS requires TURN_SECRET.');
   if (config.iceTransportPolicy === 'relay' && !config.turnUrls.length) throw new Error('Relay-only mode requires TURN configuration.');
-  const sessions = new Map(); const ids = new Map(); const rooms = new Map(); const codes = new Map(); const requests = new Map(); const buckets = new Map();
+  const sessions = new Map(); const ids = new Map(); const rooms = new Map(); const codes = new Map(); const buckets = new Map();
   let stopped = false;
 
   function rate(key, limit, window = 60000) {
@@ -82,13 +82,11 @@ export function createShelfServer(overrides = {}) {
     const room = rooms.get(client.roomId);
     if (!room) return { ended: true };
     const peer = other(client);
-    const pending = [...requests.values()].find(r => r.roomId === room.id);
     return {
       roomId: room.id, expiresAt: room.expiresAt,
       owner: room.owner === client.id,
       ...(peer ? { peer: { id: peer.id, name: peer.name, online: !!peer.stream }, initiator: room.owner === client.id } : {}),
       ...(room.owner === client.id && !room.guest ? { code: room.code, inviteSecret: room.secret, inviteExpiresAt: room.inviteExpiresAt } : {}),
-      ...(pending && room.owner === client.id ? { pending: { id: pending.id, name: ids.get(pending.guestId)?.name || 'Another browser', expiresAt: pending.expiresAt } } : {}),
     };
   }
   function snapshot(client) { send(client, 'snapshot', { state: roomState(client) }); }
@@ -99,15 +97,8 @@ export function createShelfServer(overrides = {}) {
     room.code = code; room.secret = opaque(); room.inviteExpiresAt = Math.min(config.now() + config.inviteTTL, room.expiresAt);
     codes.set(code, room.id);
   }
-  function rejectRequest(request, message = 'The connection was declined.') {
-    if (!request) return;
-    requests.delete(request.id);
-    const guest = ids.get(request.guestId); if (guest) { guest.pending = undefined; send(guest, 'pair-rejected', { message }); }
-    const room = rooms.get(request.roomId); if (room) snapshot(ids.get(room.owner));
-  }
   function endRoom(room, reason = 'ended') {
     if (!room) return;
-    for (const request of [...requests.values()]) if (request.roomId === room.id) rejectRequest(request, 'That session has ended.');
     codes.delete(room.code); rooms.delete(room.id);
     for (const id of [room.owner, room.guest]) {
       const client = ids.get(id);
@@ -181,38 +172,27 @@ export function createShelfServer(overrides = {}) {
         const input = await body(req);
         if (path === '/api/join') {
           rate(`join:${ip}`, 8); rate(`join-session:${client.id}`, 8);
-          if (other(client) || client.pending) fail(409, 'End your current connection before joining another.');
-          const ownRoom = rooms.get(client.roomId);
-          if ([...requests.values()].some(r => r.roomId === ownRoom?.id)) fail(409, 'Resolve the incoming connection request first.');
+          if (other(client)) fail(409, 'End your current connection before joining another.');
           let room;
           if (typeof input.code === 'string') room = rooms.get(codes.get(normalizeCode(input.code)));
-          else if (typeof input.roomId === 'string' && typeof input.secret === 'string') { const candidate = rooms.get(input.roomId); if (candidate && equalSecret(candidate.secret, input.secret)) room = candidate; }
+          else if (typeof input.roomId === 'string' && typeof input.secret === 'string') {
+            const candidate = rooms.get(input.roomId);
+            if (candidate && equalSecret(candidate.secret, input.secret)) room = candidate;
+          }
           if (!room || room.inviteExpiresAt <= config.now() || room.expiresAt <= config.now() || room.guest) fail(404, 'That code is unavailable. Ask the other device for a new one.', 'invalid_code');
           if (room.owner === client.id) fail(400, 'Open Shelf on your other device and enter this code there.');
-          if (!ids.get(room.owner)?.stream) fail(409, 'The other device is offline. Keep Shelf open on both devices.');
-          if ([...requests.values()].some(r => r.roomId === room.id)) fail(409, 'Another connection request is being reviewed. Try again shortly.');
-          const request = { id: opaque(12), roomId: room.id, guestId: client.id, expiresAt: config.now() + 60000 };
-          requests.set(request.id, request); client.pending = request.id;
-          send(ids.get(room.owner), 'pair-request', { request: { id: request.id, name: client.name, expiresAt: request.expiresAt } });
-          return json(res, { pending: true, name: ids.get(room.owner).name });
-        }
-        if (path === '/api/pair/cancel') {
-          const request = client.pending && requests.get(client.pending);
-          if (request && request.guestId === client.id) rejectRequest(request, 'The connection request was cancelled.');
-          client.pending = undefined; return json(res, { ok: true });
-        }
-        if (path === '/api/pair/decision') {
-          const request = requests.get(input.requestId); const room = request && rooms.get(request.roomId);
-          if (!request || !room || room.owner !== client.id || request.expiresAt <= config.now()) fail(404, 'This connection request has expired.');
-          if (input.accept !== true) { rejectRequest(request); return json(res, { ok: true }); }
-          const guest = ids.get(request.guestId);
-          if (!guest || guest.expiresAt <= config.now()) fail(404, 'The other device is no longer available.');
-          const oldRoom = rooms.get(guest.roomId); if (oldRoom) { codes.delete(oldRoom.code); rooms.delete(oldRoom.id); }
-          requests.delete(request.id); guest.pending = undefined; guest.roomId = room.id; room.guest = guest.id;
-          room.expiresAt = config.now() + config.sessionTTL; client.expiresAt = guest.expiresAt = room.expiresAt;
+          const owner = ids.get(room.owner);
+          if (!owner?.stream || owner.expiresAt <= config.now()) fail(409, 'The other device is offline. Keep Shelf open on both devices.');
+          // Possession of the expiring invitation authorizes this two-device connection.
+          // No awaits in this section: two simultaneous joins cannot claim the same room.
+          const previousRoom = rooms.get(client.roomId);
+          if (previousRoom) { codes.delete(previousRoom.code); rooms.delete(previousRoom.id); }
+          client.roomId = room.id; room.guest = client.id;
+          room.expiresAt = Math.min(config.now() + config.sessionTTL, owner.createdAt + 7200000, client.createdAt + 7200000);
+          owner.expiresAt = client.expiresAt = room.expiresAt;
           codes.delete(room.code); room.secret = undefined; room.code = undefined;
-          snapshot(guest); snapshot(client);
-          return json(res, { ok: true });
+          snapshot(owner); snapshot(client);
+          return json(res, { paired: true, state: roomState(client) });
         }
         if (path === '/api/signal') {
           const peer = other(client); if (!peer) fail(409, 'Connect a device first.');
@@ -229,7 +209,6 @@ export function createShelfServer(overrides = {}) {
         if (path === '/api/invite') {
           const room = rooms.get(client.roomId); if (!room || room.owner !== client.id || room.guest) fail(409, 'An invitation is not available in this session.');
           rate(`invite:${client.id}`, 10);
-          if ([...requests.values()].some(r => r.roomId === room.id)) fail(409, 'Resolve the connection request before refreshing your code.');
           rotateInvite(room); snapshot(client); return json(res, { ok: true });
         }
         if (path === '/api/name') {
@@ -265,7 +244,6 @@ export function createShelfServer(overrides = {}) {
   server.requestTimeout = 15000; server.headersTimeout = 10000; server.keepAliveTimeout = 65000;
   function sweep() {
     const now = config.now();
-    for (const request of [...requests.values()]) if (request.expiresAt <= now) rejectRequest(request, 'The connection request timed out. Please try again.');
     for (const room of [...rooms.values()]) if (room.expiresAt <= now) endRoom(room, 'expired');
     for (const [token, client] of sessions) if (client.expiresAt <= now) { client.stream?.end(); sessions.delete(token); ids.delete(client.id); }
     for (const [key, bucket] of buckets) if (bucket.until <= now) buckets.delete(key);

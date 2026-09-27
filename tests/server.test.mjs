@@ -31,8 +31,6 @@ async function fixture(t, overrides={}) {
     const a=await session('Desktop'),b=await session('Phone');const ea=await events(a),eb=await events(b);
     await ea.next('snapshot');await eb.next('snapshot');
     assert.equal((await post('/api/join',{code:a.state.code},b)).status,200);
-    const request=await ea.next('pair-request');
-    assert.equal((await post('/api/pair/decision',{requestId:request.request.id,accept:true},a)).status,200);
     const sa=await ea.next('snapshot'),sb=await eb.next('snapshot');return {a,b,ea,eb,sa,sb};
   }
   return {app,origin,post,session,events,paired};
@@ -63,29 +61,27 @@ test('JSON request limits, invalid JSON, and method restrictions are enforced',a
   const response=await fetch(f.origin+'/api/name',{method:'POST',headers:{'Content-Type':'application/json',Origin:f.origin,Authorization:`Bearer ${a.token}`},body:'{'});assert.equal(response.status,400);
   assert.equal((await fetch(f.origin+'/api/name',{headers:{Authorization:`Bearer ${a.token}`}})).status,405);
 });
-test('pairing waits for owner consent; both sides receive consistent roles',async t=>{
+test('code pairing connects immediately and both sides receive consistent roles',async t=>{
   const f=await fixture(t);const {a,b,sa,sb}=await f.paired();
   assert.equal(sa.state.peer.id,b.id);assert.equal(sb.state.peer.id,a.id);assert.equal(sa.state.initiator,true);assert.equal(sb.state.initiator,false);assert.equal(sa.state.roomId,sb.state.roomId);
   assert.equal(sa.state.inviteSecret,undefined);assert.equal(sa.state.code,undefined);
 });
-test('an unrelated browser cannot approve a pending connection',async t=>{
-  const f=await fixture(t),a=await f.session(),b=await f.session(),c=await f.session();const ea=await f.events(a);await ea.next('snapshot');
-  await f.post('/api/join',{code:a.state.code},b);const request=await ea.next('pair-request');
-  assert.equal((await f.post('/api/pair/decision',{requestId:request.request.id,accept:true},c)).status,404);
-  assert.equal((await f.post('/api/signal',{signal:{type:'restart',connectionId:'x'}},b)).status,409);
+test('an unrelated browser cannot join a claimed room or signal into it',async t=>{
+  const f=await fixture(t),{a}=await f.paired(),c=await f.session();
+  assert.equal((await f.post('/api/join',{roomId:a.state.roomId,secret:a.state.inviteSecret},c)).status,404);
+  assert.equal((await f.post('/api/signal',{signal:{type:'restart',connectionId:'x'}},c)).status,409);
 });
 test('full-secret QR pairing works and a wrong secret is rejected',async t=>{
   const f=await fixture(t),a=await f.session(),b=await f.session();const ea=await f.events(a);await ea.next('snapshot');
   assert.equal((await f.post('/api/join',{roomId:a.state.roomId,secret:'x'.repeat(32)},b)).status,404);
   assert.equal((await f.post('/api/join',{roomId:a.state.roomId,secret:a.state.inviteSecret},b)).status,200);
-  const request=await ea.next('pair-request');assert.ok(request.request.id);
+  const state=await ea.next('snapshot');assert.equal(state.state.peer.id,b.id);assert.equal(state.state.code,undefined);
 });
-test('declined and cancelled requests leave the original shelves usable',async t=>{
+test('failed join leaves the browser’s original shelf and invite usable',async t=>{
   const f=await fixture(t),a=await f.session(),b=await f.session();const ea=await f.events(a),eb=await f.events(b);await ea.next('snapshot');await eb.next('snapshot');
-  await f.post('/api/join',{code:a.state.code},b);const request=await ea.next('pair-request');
-  assert.equal((await f.post('/api/pair/decision',{requestId:request.request.id,accept:false},a)).status,200);assert.equal((await eb.next('pair-rejected')).type,'pair-rejected');
-  assert.equal((await f.post('/api/join',{code:a.state.code},b)).status,200);
-  assert.equal((await f.post('/api/pair/cancel',{},b)).status,200);
+  assert.equal((await f.post('/api/join',{code:'NOTVALID'},b)).status,404);
+  const response=await f.post('/api/join',{code:b.state.code},a);assert.equal(response.status,200);
+  const result=await response.json();assert.equal(result.paired,true);assert.equal(result.state.peer.id,b.id);
 });
 test('invitation rotation invalidates both the old code and secret',async t=>{
   const f=await fixture(t),a=await f.session(),b=await f.session();const ea=await f.events(a);await ea.next('snapshot');
@@ -97,7 +93,7 @@ test('a paired room admits no third browser and consumes its invite',async t=>{
   const f=await fixture(t),{a}=await f.paired(),c=await f.session();
   assert.equal((await f.post('/api/join',{code:a.state.code},c)).status,404);
 });
-test('signaling stays inside the approved room and strips non-protocol properties',async t=>{
+test('signaling stays inside the paired room and strips non-protocol properties',async t=>{
   const f=await fixture(t),{a,eb}=await f.paired();
   const response=await f.post('/api/signal',{signal:{type:'offer',connectionId:'one',sdp:'v=0\r\n',filename:'secret.pdf',text:'private'}},a);assert.equal(response.status,200);
   const message=await eb.next('signal');assert.deepEqual(message.signal,{type:'offer',connectionId:'one',sdp:'v=0\r\n'});
@@ -132,4 +128,28 @@ test('TURN credentials are expiring, per-session HMAC credentials',async t=>{
 });
 test('code and device-name normalization remove control and bidi characters',()=>{
   assert.equal(normalizeCode(' abcd-2345 '),'ABCD2345');assert.equal(cleanName('  Phone\u202E\n  '),'Phone');assert.equal(cleanName('x'.repeat(100)).length,40);
+});
+
+test('simultaneous joins are atomic and only one guest claims the invitation',async t=>{
+  const f=await fixture(t),a=await f.session(),b=await f.session(),c=await f.session();const ea=await f.events(a);await ea.next('snapshot');
+  const responses=await Promise.all([f.post('/api/join',{code:a.state.code},b),f.post('/api/join',{code:a.state.code},c)]);
+  assert.deepEqual(responses.map(r=>r.status).sort(),[200,404]);
+  const joined=await (responses.find(r=>r.status===200)).json();assert.equal(joined.paired,true);
+  const state=await ea.next('snapshot');assert.ok([b.id,c.id].includes(state.state.peer.id));
+});
+test('self-pairing is rejected without consuming the code',async t=>{
+  const f=await fixture(t),a=await f.session(),b=await f.session();const ea=await f.events(a);await ea.next('snapshot');
+  assert.equal((await f.post('/api/join',{code:a.state.code},a)).status,400);
+  assert.equal((await f.post('/api/join',{code:a.state.code},b)).status,200);
+});
+test('offline owner and expired invitations cannot connect automatically',async t=>{
+  let now=Date.now();const f=await fixture(t,{now:()=>now,inviteTTL:1000}),a=await f.session(),b=await f.session();
+  assert.equal((await f.post('/api/join',{code:a.state.code},b)).status,409);
+  const ea=await f.events(a);await ea.next('snapshot');now+=1001;
+  assert.equal((await f.post('/api/join',{code:a.state.code},b)).status,404);
+});
+test('joining consumes the guest’s abandoned invitation as well',async t=>{
+  const f=await fixture(t),{b}=await f.paired(),c=await f.session();
+  assert.equal((await f.post('/api/join',{code:b.state.code},c)).status,404);
+  assert.equal((await f.post('/api/join',{roomId:b.state.roomId,secret:b.state.inviteSecret},c)).status,404);
 });

@@ -4,7 +4,7 @@ Shelf is a small, auditable implementation, not an independently audited securit
 
 ## Implemented boundaries
 
-- New browser sessions use random bearer tokens. Invitations are short-lived; QR secrets are high entropy. Pairing and incoming transfers require separate explicit approval.
+- New browser sessions use random bearer tokens. Invitations are short-lived; QR secrets are high entropy. Possession of an unexpired invitation authorizes immediate pairing. Paired devices automatically receive items, subject to protocol, file-size, item-count and cumulative storage limits. Do not expose invitation codes publicly.
 - Bearer tokens stay in runtime memory and HTTP Authorization headers. The QR fragment is removed from history. Tokens are not persisted in storage or placed in event-stream URLs.
 - Production requires an explicit HTTPS origin allowlist. POST commands enforce Origin; APIs reject inappropriate content types and oversized JSON. No cross-origin API access is enabled.
 - Rate limits apply to new sessions, join guesses, API operations, invitation rotation and stream reconnects. HTTP request/header timeouts and bounded room/session state limit some resource abuse.

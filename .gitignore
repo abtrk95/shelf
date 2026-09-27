@@ -1,11 +1,10 @@
 node_modules/
 .env
-*.log
+.env.*
+!.env.example
+.DS_Store
 __pycache__/
 .pytest_cache/
 test-results/
-
-.env
-.env.*
-node_modules/
-.DS_Store
+.ai-bridge/
+dist/

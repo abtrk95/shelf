@@ -47,12 +47,26 @@ def browser():
         instance.close()
 
 @pytest.fixture
-def contexts(browser):
+def contexts(browser, request):
     created = []
     def make(**options):
         context = browser.new_context(**options)
         created.append(context)
         return context
     yield make
-    for context in created:
+    for index, context in enumerate(created):
+        if getattr(request.node, 'rep_call', None) and request.node.rep_call.failed:
+            for number, page in enumerate(context.pages):
+                try:
+                    folder = ROOT / 'test-results'
+                    folder.mkdir(exist_ok=True)
+                    page.screenshot(path=str(folder / f'failure-{request.node.name}-{index}-{number}.png'), full_page=True)
+                except Exception:
+                    pass
         context.close()
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    outcome = yield
+    report = outcome.get_result()
+    setattr(item, 'rep_' + report.when, report)
