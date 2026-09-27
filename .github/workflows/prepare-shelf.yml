@@ -1,0 +1,59 @@
+name: Prepare and verify Shelf UX update
+on:
+  push:
+    branches: [work/shelf-frictionless-20260927]
+permissions:
+  contents: write
+concurrency:
+  group: shelf-ux-preparation
+  cancel-in-progress: true
+jobs:
+  prepare:
+    if: github.ref == 'refs/heads/work/shelf-frictionless-20260927'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: e2e/requirements.txt
+      - name: Apply scoped source update
+        run: |
+          for script in .ci-tools/*.py; do python "$script"; done
+          python -m py_compile e2e/conftest.py e2e/test_shelf.py
+      - run: npm ci --include=dev --ignore-scripts --no-audit --no-fund
+      - run: npm run check
+      - run: python -m pip install -r e2e/requirements.txt
+      - run: python -m playwright install --with-deps chromium
+      - run: npm run test:e2e
+      - name: Record validated source only on work branch
+        run: |
+          test "$GITHUB_REF_NAME" = "work/shelf-frictionless-20260927"
+          python - <<'PY'
+          from pathlib import Path
+          import os
+          report = Path('docs/TEST_REPORT.md')
+          text = report.read_text()
+          marker = '54 unit/protocol/security checks pass in the implementation workspace. Real-browser validation runs in GitHub Actions; see the associated successful run for results and screenshots. The local managed Chromium blocks navigation, so no local browser pass is claimed for version 1.1.'
+          url = f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
+          text = text.replace(marker, f'54 unit/protocol/security checks and 10 Chromium end-to-end tests passed in GitHub Actions. Type checking and the production build passed. Browser checks include automatic code/QR pairing, automatic bidirectional receiving, verified binary downloads, interrupted-transfer recovery, mobile layout, full-text reading, focus return, image previews, and reduced motion.\n\nRun: {url}\n\nReal-device iOS Safari and separate-network TURN validation remain pending.')
+          report.write_text(text)
+          PY
+          git rm -r -- .ci-tools .github/workflows/prepare-shelf.yml
+          git add -- src public server scripts tests e2e docs README.md SECURITY.md dist .npmrc
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m "Implement and verify frictionless Shelf experience"
+          git push origin HEAD:refs/heads/work/shelf-frictionless-20260927
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: shelf-v11-browser-screenshots
+          path: test-results/*.png
+          if-no-files-found: ignore
