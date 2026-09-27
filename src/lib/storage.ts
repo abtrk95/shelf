@@ -35,7 +35,7 @@ export class TemporaryStorage {
       const writer = await handle.createWritable(); let closed = false; let disposed = false;
       this.reserved += size;
       return {
-        write: async bytes => { if (closed || disposed) throw new Error('This transfer is no longer open.'); await writer.write(bytes); },
+        write: async bytes => { if (closed || disposed) throw new Error('This transfer is no longer open.'); const copy = new Uint8Array(bytes.byteLength); copy.set(bytes); await writer.write(copy.buffer); },
         finish: async mime => {
           if (disposed) throw new Error('This transfer was cancelled.');
           if (!closed) { await writer.close(); closed = true; }
