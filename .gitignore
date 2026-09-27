@@ -1,0 +1,11 @@
+node_modules/
+.env
+*.log
+__pycache__/
+.pytest_cache/
+test-results/
+
+.env
+.env.*
+node_modules/
+.DS_Store

@@ -1,0 +1,19 @@
+{
+  "name": "shelf-transfer",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A private, temporary shared shelf between two browsers.",
+  "type": "module",
+  "engines": { "node": ">=22.16.0" },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env server/index.mjs",
+    "dev": "npm run build && node --watch --env-file-if-exists=.env server/index.mjs",
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test tests/*.test.mjs",
+    "check": "npm run typecheck && npm run build && npm test",
+    "test:e2e": "python -m pytest e2e/ -q",
+    "watch:client": "tsc --watch"
+  },
+  "devDependencies": { "typescript": "5.8.3" }
+}

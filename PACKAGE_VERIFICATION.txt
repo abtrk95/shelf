@@ -1,0 +1,14 @@
+Shelf 1.0.0 — package verification
+26 September 2026
+
+PASS: ZIP extracted into a clean temporary directory.
+PASS: No node_modules or runtime npm dependencies were present.
+PASS: npm start launched the app from the extracted package (Node v22.16.0).
+PASS: /healthz returned status ok.
+PASS: HTML, CSS, main client module, transfer module and icon returned HTTP 200.
+PASS: npm test from the extracted package — 44 passed, 0 failed.
+PASS: Archive CRC verification.
+
+The final archive was regenerated only to include this report; application and
+test files are unchanged from the extracted-package checks above.
+Browser and deployment validation scope: docs/TEST_REPORT.md.

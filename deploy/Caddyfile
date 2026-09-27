@@ -1,0 +1,10 @@
+{$SHELF_DOMAIN} {
+    # SSE is streamed immediately by Caddy based on Content-Type.
+    # Do not add a response buffer or a short stream timeout.
+    reverse_proxy app:3000 {
+        # The Node service is private to this Compose network. Overwrite, never trust,
+        # a client-provided X-Forwarded-For value for the app's rate limiting.
+        header_up X-Forwarded-For {remote_host}
+    }
+    # Access logs are deliberately not enabled. Never log Authorization headers.
+}
