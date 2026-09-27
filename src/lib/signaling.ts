@@ -8,9 +8,24 @@ export class SignalingClient {
   private stopped = false;
   private signalQueue: Promise<unknown> = Promise.resolve();
   constructor(private onEvent: (event: ServerEvent) => void, private onNetwork: (online: boolean) => void) {}
-  async start(name: string): Promise<Session> {
-    this.session = await this.post<Session>('/api/session', { name });
-    void this.stream(); return this.session;
+  async start(name: string, deviceId: string): Promise<Session> {
+    this.session = null;
+    this.session = await this.post<Session>('/api/session', { name, deviceId });
+    this.lastSequence = 0;
+    void this.stream();
+    return this.session;
+  }
+  async resume(saved: Session): Promise<Session> {
+    this.session = saved;
+    try {
+      this.session = await this.post<Session>('/api/resume', {});
+      this.lastSequence = 0;
+      void this.stream();
+      return this.session;
+    } catch (error) {
+      this.session = null;
+      throw error;
+    }
   }
   async post<T = { ok: boolean }>(path: string, payload: object): Promise<T> {
     const response = await fetch(path, {
