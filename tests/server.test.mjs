@@ -153,3 +153,12 @@ test('joining consumes the guest’s abandoned invitation as well',async t=>{
   assert.equal((await f.post('/api/join',{code:b.state.code},c)).status,404);
   assert.equal((await f.post('/api/join',{roomId:b.state.roomId,secret:b.state.inviteSecret},c)).status,404);
 });
+
+test('reload resume preserves the same paired room and device identity',async t=>{
+  const f=await fixture(t),{a,b}=await f.paired();
+  assert.match(a.deviceId,/^[a-f0-9-]{36}$/);
+  const response=await f.post('/api/resume',{},a);assert.equal(response.status,200);
+  const resumed=await response.json();
+  assert.equal(resumed.id,a.id);assert.equal(resumed.token,a.token);assert.equal(resumed.deviceId,a.deviceId);
+  assert.equal(resumed.state.peer.id,b.id);assert.equal(resumed.state.peer.deviceId,b.deviceId);
+});
