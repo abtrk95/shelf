@@ -12,6 +12,29 @@ import type { ConnectionState, RoomState, SecurityState, ServerEvent, Session, S
 type Theme = 'system' | 'light' | 'dark';
 interface Preferences { theme: Theme; language: Language; name: string; sound: boolean }
 const DEFAULTS: Preferences = { theme:'system',language:'en',name:'',sound:false };
+const SESSION_KEY = 'shelf.session.v2';
+const DEVICE_KEY = 'shelf.device.v2';
+function stableDeviceId(): string {
+  try {
+    const value = localStorage.getItem(DEVICE_KEY);
+    if (value && /^[a-f0-9-]{36}$/i.test(value)) return value;
+    const created = crypto.randomUUID();
+    localStorage.setItem(DEVICE_KEY, created);
+    return created;
+  } catch { return crypto.randomUUID(); }
+}
+function loadStoredSession(): Session | null {
+  try {
+    const value = JSON.parse(sessionStorage.getItem(SESSION_KEY) || 'null') as Session | null;
+    return value && typeof value.token === 'string' && typeof value.id === 'string' ? value : null;
+  } catch { return null; }
+}
+function storeSession(session: Session): void {
+  try { sessionStorage.setItem(SESSION_KEY, JSON.stringify(session)); } catch { /* Reload recovery is best effort. */ }
+}
+function clearStoredSession(): void {
+  try { sessionStorage.removeItem(SESSION_KEY); } catch { /* Ignore restricted storage. */ }
+}
 function loadPreferences(): Preferences {
   try {
     const value=JSON.parse(localStorage.getItem('shelf.preferences.v1')||'{}');
@@ -55,6 +78,9 @@ class ShelfApp {
     if(invite){const match=/^([\w-]{16})\.([\w-]{32})$/.exec(invite);if(match)this.invitation={roomId:match[1],secret:match[2]};history.replaceState(null,'',location.pathname+location.search);}
     this.applyPreferences();this.renderFrame();this.bind();
     setInterval(()=>this.tick(),1000);
+    if ('serviceWorker' in navigator && window.isSecureContext) {
+      window.addEventListener('load', () => { void navigator.serviceWorker.register('/sw.js').catch(() => undefined); }, { once:true });
+    }
     void this.start();
   }
   private applyPreferences(): void {
@@ -120,18 +146,29 @@ class ShelfApp {
       const client=new SignalingClient(event=>{if(this.generation===generation)this.handleEvent(event);},online=>{
         if(this.generation!==generation)return;this.serviceOnline=online;if(online)this.peer?.online();this.renderPair();this.renderNotice();
       });this.client=client;
-      const session=await client.start(this.prefs.name||deviceName());if(this.generation!==generation){client.close();return;}
-      this.session=session;this.room=session.state;
-      this.engine=new TransferEngine(storage,session.config.maxFileBytes,()=>{
+      let session:Session;
+      const saved=this.invitation?null:loadStoredSession();
+      if(this.invitation)clearStoredSession();
+      if(saved){
+        try{session=await client.resume(saved);}
+        catch{clearStoredSession();session=await client.start(this.prefs.name||deviceName(),stableDeviceId());}
+      }else session=await client.start(this.prefs.name||deviceName(),stableDeviceId());
+      if(this.generation!==generation){client.close();return;}
+      storeSession(session);this.session=session;this.room=session.state;
+      const engine=new TransferEngine(storage,session.config.maxFileBytes,()=>{
         this.root.dataset.transferring=String(this.engine?.active||false);this.renderShelf();void this.manageWake();
       },message=>this.toast(message),item=>{
         this.playSound();this.announce(this.t(item.direction==='received'?'completeReceived':'completeSent'));
         if(item.direction==='received')this.toast(this.t('itemReceived'),()=>this.viewShelf());
       });
+      this.engine=engine;
+      await engine.restore();
+      engine.setPeer(this.room.peer?{deviceId:this.room.peer.deviceId||this.room.peer.id,name:this.room.peer.name}:null);
       this.peer=new PeerTransport(session.config,signal=>client.signal(signal),{
         state:state=>{const was=this.connection;this.connection=state;this.root.dataset.connection=state;this.renderPair();if(state==='connected'&&was!=='connected')this.toast(this.t('connectionApproved'));},
         channel:channel=>this.engine?.setChannel(channel),security:security=>{this.security=security;this.renderPair();},
       });
+      if(this.room.peer)this.peer.connect(this.room.peer.id,!!this.room.initiator);
       this.starting=false;this.renderPair();this.renderShelf();this.renderNotice();
       if(this.invitation){const invite=this.invitation;this.invitation=null;await this.join(invite);}
     }catch(error){if(generation!==this.generation)return;this.starting=false;this.bootError=errorMessage(error);await storage.dispose();this.renderPair();}
@@ -139,6 +176,8 @@ class ShelfApp {
   private handleEvent(event: ServerEvent): void {
     if(event.type==='snapshot'&&event.state){
       this.room=event.state;
+      if(this.session){this.session.state=event.state;storeSession(this.session);}
+      this.engine?.setPeer(event.state.peer?{deviceId:event.state.peer.deviceId||event.state.peer.id,name:event.state.peer.name}:null);
       if(event.state.ended){this.endLocal(false);return;}
       if(event.state.peer){this.joining=false;this.peer?.connect(event.state.peer.id,!!event.state.initiator);}
       this.renderPair();
@@ -148,7 +187,7 @@ class ShelfApp {
   }
   private endLocal(expired: boolean): void {
     if(this.ended)return;this.ended=true;this.expired=expired;this.room={};this.connection='idle';this.dialog?.close();
-    this.client?.close();this.peer?.close();const engine=this.engine;this.engine=null;void engine?.destroy();this.serviceOnline=false;
+    clearStoredSession();this.session=null;this.client?.close();this.peer?.close();this.engine?.setPeer(null);this.serviceOnline=false;
     this.renderPair();this.renderShelf();this.renderNotice();void this.manageWake();
   }
   private invitationURL(): string | null {
@@ -455,8 +494,7 @@ class ShelfApp {
     window.addEventListener('online',()=>{this.renderNotice();this.peer?.online();});window.addEventListener('offline',()=>this.renderNotice());
     document.addEventListener('visibilitychange',()=>{void this.manageWake();if(document.visibilityState==='visible')this.peer?.online();});
     matchMedia('(prefers-color-scheme: dark)').addEventListener('change',()=>{if(this.prefs.theme==='system'){this.applyPreferences();this.updateThemeIcon();}});
-    window.addEventListener('beforeunload',event=>{if(this.engine?.items.some(i=>!['complete','cancelled','declined','error'].includes(i.state))){event.preventDefault();event.returnValue='';}});
-    window.addEventListener('pagehide',()=>{this.client?.close();this.peer?.close();void this.engine?.destroy();});
+    window.addEventListener('pagehide',()=>{this.client?.close();this.peer?.close();void this.engine?.suspend();});
   }
 }
 new ShelfApp();
