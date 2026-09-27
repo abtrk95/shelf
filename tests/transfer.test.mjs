@@ -7,15 +7,28 @@ import { SHA256 } from '../dist/app/lib/sha256.js';
 
 class MemoryTestStorage {
   maxFileBytes = 1024 * 1024;
+  mode = 'memory';
   disposed = 0;
+  records = new Map();
+  blobs = new Map();
   async create() {
     const parts = [];
     return {
+      offset: 0,
       write: async bytes => parts.push(bytes.slice()),
       finish: async mime => new Blob(parts, { type: mime }),
       dispose: async () => { this.disposed++; parts.length = 0; },
     };
   }
+  async saveItem(item) {
+    const {file,url,...record}=item;
+    this.records.set(item.id,structuredClone({...record,speed:0,accepted:false}));
+  }
+  async loadItems() { return [...this.records.values()].map(item=>structuredClone(item)); }
+  async saveBlob(id,blob) { this.blobs.set(id,blob.slice(0,blob.size,blob.type)); }
+  async loadBlob(id) { return this.blobs.get(id)||null; }
+  async removeBlob(id) { this.blobs.delete(id); }
+  async removeItem(id) { this.records.delete(id);this.blobs.delete(id); }
   async dispose() {}
 }
 function harness(t, limit = 2 * 1024 * 1024) {
@@ -132,4 +145,18 @@ test('a peer cannot reuse the identifier of an outgoing item', async t => {
   const h=harness(t);h.engine.addText('Local note');const id=h.engine.items[0].id;
   h.inject({...h.offer(),id});await h.flush();assert.equal(h.channel.readyState,'closed');
   assert.equal(h.engine.items.length,1);
+});
+
+test('text outbox survives an engine reconstruction',async()=>{
+  const storage=new MemoryTestStorage(), notices=[];
+  const first=new TransferEngine(storage,2*1024*1024,()=>{},message=>notices.push(message),()=>{});
+  first.addText('Persistent note\nمرحبا');
+  await first.flushPersistence();
+  await first.destroy();
+  const second=new TransferEngine(storage,2*1024*1024,()=>{},message=>notices.push(message),()=>{});
+  await second.restore();
+  assert.equal(second.items.length,1);
+  assert.equal(second.items[0].text,'Persistent note\nمرحبا');
+  assert.equal(second.items[0].state,'queued');
+  await second.destroy();
 });
