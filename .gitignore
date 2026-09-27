@@ -8,3 +8,8 @@ __pycache__/
 test-results/
 .ai-bridge/
 dist/
+
+.env
+.env.*
+node_modules/
+.DS_Store
